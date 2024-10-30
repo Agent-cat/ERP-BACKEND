@@ -17,7 +17,6 @@ const sendOTP = async (email, otp) => {
     },
   });
 
-  // Verify transporter configuration
   try {
     await transporter.verify();
   } catch (error) {
@@ -25,20 +24,19 @@ const sendOTP = async (email, otp) => {
     throw new Error("Email service configuration error");
   }
 
-  // Send the email
   try {
     await transporter.sendMail({
-      from: `"Student Portal ERP" <${process.env.EMAIL_USER}>`,
+      from: `" vishnu's KL ERP" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: "Your OTP for verification",
+      subject: " OTP for verification",
       text: `Your OTP is: ${otp}`,
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Student Portal ERP - Email Verification</h2>
-          <p style="font-size: 16px; color: #666;">Your verification OTP is:</p>
+          <h2 style="color: #333;">KL ERP </h2>
+          <p style="font-size: 16px; color: #666;">Your OTP is:</p>
           <h1 style="color: #007bff; font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px;">${otp}</h1>
           <p style="font-size: 14px; color: #999;">This OTP will expire in 10 minutes.</p>
-          <p style="font-size: 14px; color: #999;">If you didn't request this verification, please ignore this email.</p>
+        
         </div>
       `,
     });
@@ -90,7 +88,6 @@ export const signin = async (req, res) => {
 export const signup = async (req, res) => {
   const { Username, Password, Email } = req.body;
   try {
-    // Validate email configuration
     if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
       return res.json({
         msg: "error",
@@ -98,7 +95,6 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Check for existing user
     const existingUser = await db.findOne({ Email });
     if (existingUser) {
       return res.json({
@@ -107,12 +103,10 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Generate OTP and hash password
     const otp = Math.floor(100000 + Math.random() * 900000);
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(Password, salt);
 
-    // Create new user
     const newUser = await db.create({
       Username,
       Password: hashedPassword,
@@ -122,12 +116,11 @@ export const signup = async (req, res) => {
       otpExpiry: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes expiry
     });
 
-    // Send OTP email
     try {
       await sendOTP(Email, otp);
     } catch (emailError) {
       console.error("Failed to send OTP:", emailError);
-      // Cleanup: Delete the created user if email sending fails
+
       await db.findByIdAndDelete(newUser._id);
       return res.json({
         msg: "error",
@@ -135,7 +128,6 @@ export const signup = async (req, res) => {
       });
     }
 
-    // Return success response
     res.json({
       msg: "verification_pending",
       userId: newUser._id,

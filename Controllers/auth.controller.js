@@ -2,6 +2,51 @@ import { db } from "../models/users.model.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import "dotenv/config";
+import nodemailer from "nodemailer";
+
+const sendOTP = async (email, otp) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+    throw new Error("Email configuration is missing");
+  }
+
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_APP_PASSWORD,
+    },
+  });
+
+  // Verify transporter configuration
+  try {
+    await transporter.verify();
+  } catch (error) {
+    console.error("Email transporter verification failed:", error);
+    throw new Error("Email service configuration error");
+  }
+
+  // Send the email
+  try {
+    await transporter.sendMail({
+      from: `"Student Portal ERP" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Your OTP for verification",
+      text: `Your OTP is: ${otp}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Student Portal ERP - Email Verification</h2>
+          <p style="font-size: 16px; color: #666;">Your verification OTP is:</p>
+          <h1 style="color: #007bff; font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px;">${otp}</h1>
+          <p style="font-size: 14px; color: #999;">This OTP will expire in 10 minutes.</p>
+          <p style="font-size: 14px; color: #999;">If you didn't request this verification, please ignore this email.</p>
+        </div>
+      `,
+    });
+  } catch (error) {
+    console.error("Failed to send email:", error);
+    throw new Error("Failed to send OTP email");
+  }
+};
 
 export const signin = async (req, res) => {
   try {
@@ -45,26 +90,96 @@ export const signin = async (req, res) => {
 export const signup = async (req, res) => {
   const { Username, Password, Email } = req.body;
   try {
+    // Validate email configuration
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+      return res.json({
+        msg: "error",
+        data: "Email service not configured properly",
+      });
+    }
+
+    // Check for existing user
+    const existingUser = await db.findOne({ Email });
+    if (existingUser) {
+      return res.json({
+        msg: "error",
+        data: "User already exists with this email",
+      });
+    }
+
+    // Generate OTP and hash password
+    const otp = Math.floor(100000 + Math.random() * 900000);
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(Password, salt);
 
+    // Create new user
     const newUser = await db.create({
-      Username: Username,
+      Username,
       Password: hashedPassword,
-      Email: Email,
+      Email,
+      isVerified: false,
+      otp,
+      otpExpiry: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes expiry
     });
 
-    const token = jwt.sign({ id: newUser._id }, process.env.JWT_SECRET, {
+    // Send OTP email
+    try {
+      await sendOTP(Email, otp);
+    } catch (emailError) {
+      console.error("Failed to send OTP:", emailError);
+      // Cleanup: Delete the created user if email sending fails
+      await db.findByIdAndDelete(newUser._id);
+      return res.json({
+        msg: "error",
+        data: "Failed to send verification email. Please try again later.",
+      });
+    }
+
+    // Return success response
+    res.json({
+      msg: "verification_pending",
+      userId: newUser._id,
+    });
+  } catch (err) {
+    console.error("Signup error:", err);
+    res.json({
+      msg: "error",
+      data: err.message || "Failed to create user",
+    });
+  }
+};
+
+export const verifyOTP = async (req, res) => {
+  const { userId, otp } = req.body;
+
+  try {
+    const user = await db.findById(userId);
+
+    if (!user) {
+      return res.json({ msg: "error", data: "User not found" });
+    }
+
+    if (user.otp !== otp || Date.now() > user.otpExpiry) {
+      return res.json({ msg: "error", data: "Invalid or expired OTP" });
+    }
+
+    user.isVerified = true;
+    user.otp = undefined;
+    user.otpExpiry = undefined;
+    await user.save();
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "1h",
     });
 
     res.json({
-      msg: "created",
-      token: token,
+      msg: "success",
+      token,
+      data: user,
     });
   } catch (err) {
     res.json({
-      msg: "error in finding",
+      msg: "error",
       data: err.message,
     });
   }
